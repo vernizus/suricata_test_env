@@ -1,0 +1,499 @@
+%YAML 1.1
+---
+
+# Suricata 8.0 - Docker-adapted config (based on suricata-merged.yaml)
+# Key differences vs production:
+#   - HOME_NET covers all RFC1918 private ranges
+#   - Interface: 'default' (passed via -i in docker-compose)
+#   - checksum-validation: no (virtual NICs do not do checksum offloading)
+#   - fast.log enabled (easier to read in test environments)
+#   - Rules: local.rules only (no ET community rules)
+#   - No MPM cache (avoids dependency on an extra volume)
+suricata-version: "8.0"
+
+##
+## Network
+##
+
+vars:
+  address-groups:
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.1/8,::1]"
+    EXTERNAL_NET: "!$HOME_NET"
+    HTTP_SERVERS: "$HOME_NET"
+    SMTP_SERVERS: "$HOME_NET"
+    SQL_SERVERS: "$HOME_NET"
+    DNS_SERVERS: "$HOME_NET"
+    TELNET_SERVERS: "$HOME_NET"
+    AIM_SERVERS: "$EXTERNAL_NET"
+    DC_SERVERS: "$HOME_NET"
+    DNP3_SERVER: "$HOME_NET"
+    DNP3_CLIENT: "$HOME_NET"
+    MODBUS_CLIENT: "$HOME_NET"
+    MODBUS_SERVER: "$HOME_NET"
+    ENIP_CLIENT: "$HOME_NET"
+    ENIP_SERVER: "$HOME_NET"
+
+  port-groups:
+    HTTP_PORTS: "80,8080"
+    SHELLCODE_PORTS: "!80"
+    ORACLE_PORTS: 1521
+    SSH_PORTS: 22
+    DNP3_PORTS: 20000
+    MODBUS_PORTS: 502
+    FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+    FTP_PORTS: 21
+    GENEVE_PORTS: 6081
+    VXLAN_PORTS: 4789
+    TEREDO_PORTS: 3544
+    SIP_PORTS: "[5060,5061]"
+
+##
+## Outputs
+##
+
+default-log-dir: /var/log/suricata/
+
+stats:
+  enabled: yes
+  interval: 8
+
+outputs:
+  # fast.log: plain-text alerts — useful for quick visibility in terminal
+  - fast:
+      enabled: yes
+      filename: fast.log
+      append: yes
+
+  # eve.json: primary output consumed by Wazuh
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      append: yes
+      community-id: true
+      community-id-seed: 0
+      metadata: yes
+      xff:
+        enabled: no
+        mode: extra-data
+        deployment: reverse
+        header: X-Forwarded-For
+
+      types:
+        - alert:
+            tagged-packets: yes
+            verdict: yes
+            metadata: yes
+
+        - anomaly:
+            enabled: yes
+            types:
+              decode: yes
+              stream: yes
+              applayer: yes
+
+        - http:
+            enabled: yes
+            extended: yes
+
+        - dns:
+            enabled: yes
+            version: 3
+
+        - mdns:
+
+        - tls:
+            enabled: yes
+            extended: yes
+
+        - files:
+            enabled: yes
+            force-magic: no
+
+        - smtp:
+            enabled: yes
+            extended: yes
+            custom: [received, x-mailer, x-originating-ip, relays, reply-to, subject]
+
+        - ssh:
+            enabled: yes
+        - websocket
+        - ftp
+        - rdp
+        - nfs
+        - smb
+        - tftp
+        - ike
+        - dcerpc
+        - krb5
+        - snmp
+        - rfb
+        - sip
+        - quic:
+            enabled: yes
+        - ldap
+        - pop3
+        - dhcp:
+            enabled: yes
+            extended: no
+
+        - stats:
+            enabled: no   # do not enable: floods Wazuh with giant JSON blobs
+
+        - flow:
+            enabled: no   # do not enable: massive volume with no alert value
+
+  - tls-store:
+      enabled: no
+
+  - pcap-log:
+      enabled: no
+      filename: log.pcap
+      limit: 500 MiB
+      max-files: 5
+      mode: normal
+
+  - stats:
+      enabled: yes
+      filename: stats.log
+      append: yes
+      totals: yes
+      threads: no
+
+  - file-store:
+      version: 2
+      enabled: no
+
+logging:
+  default-log-level: notice
+  outputs:
+  - console:
+      enabled: yes
+  - file:
+      enabled: yes
+      level: info
+      filename: suricata.log
+  - syslog:
+      enabled: no
+
+##
+## Capture — af-packet (Linux kernel, works inside WSL2)
+##
+
+af-packet:
+  - interface: default
+    cluster-id: 99
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+    ring-size: 2048
+    buffer-size: 32768
+    # checksum-checks: no — mandatory for virtual NICs (Docker, VMware, VirtualBox)
+    # Virtual NICs do not perform checksum offloading, generating false errors
+    checksum-checks: no
+
+# pcap fallback if af-packet is unavailable
+pcap:
+  - interface: default
+
+pcap-file:
+  checksum-checks: auto
+
+##
+## App Layer
+##
+
+app-layer:
+  protocols:
+    telnet:
+      enabled: yes
+    rfb:
+      enabled: yes
+      detection-ports:
+        dp: 5900, 5901, 5902, 5903, 5904, 5905, 5906, 5907, 5908, 5909
+    mqtt:
+      enabled: yes
+    krb5:
+      enabled: yes
+    snmp:
+      enabled: yes
+    ike:
+      enabled: yes
+    tls:
+      enabled: yes
+      detection-ports:
+        dp: 443, 8443
+      ja3-fingerprints: auto
+      ja4-fingerprints: auto
+    dcerpc:
+      enabled: yes
+    ftp:
+      enabled: yes
+    rdp:
+      enabled: yes
+    ssh:
+      enabled: yes
+      hassh: yes
+    doh2:
+      enabled: yes
+    http2:
+      enabled: yes
+    smtp:
+      enabled: yes
+      raw-extraction: no
+      mime:
+        decode-mime: yes
+        decode-base64: yes
+        decode-quoted-printable: yes
+        header-value-depth: 2000
+        extract-urls: yes
+        body-md5: no
+    imap:
+      enabled: detection-only
+    pop3:
+      enabled: yes
+      detection-ports:
+        dp: 110
+    smb:
+      enabled: yes
+      detection-ports:
+        dp: 139, 445
+    nfs:
+      enabled: yes
+    tftp:
+      enabled: yes
+    dns:
+      tcp:
+        enabled: yes
+        detection-ports:
+          dp: 53
+      udp:
+        enabled: yes
+        detection-ports:
+          dp: 53
+    http:
+      enabled: yes
+      libhtp:
+         default-config:
+           personality: IDS
+           request-body-limit: 100 KiB
+           response-body-limit: 100 KiB
+           request-body-minimal-inspect-size: 32 KiB
+           request-body-inspect-window: 4 KiB
+           response-body-minimal-inspect-size: 40 KiB
+           response-body-inspect-window: 16 KiB
+           response-body-decompress-layer-limit: 2
+           http-body-inline: auto
+           swf-decompression:
+             enabled: no
+           double-decode-path: no
+           double-decode-query: no
+    modbus:
+      enabled: no
+    dnp3:
+      enabled: no
+    enip:
+      enabled: no
+    ntp:
+      enabled: yes
+    quic:
+      enabled: yes
+    dhcp:
+      enabled: yes
+    sip:
+      enabled: yes
+    ldap:
+      tcp:
+        enabled: yes
+        detection-ports:
+          dp: 389, 3268
+      udp:
+        enabled: yes
+        detection-ports:
+          dp: 389, 3268
+    mdns:
+      enabled: yes
+    pgsql:
+      enabled: no
+
+asn1-max-frames: 256
+
+##
+## Security and misc
+##
+
+security:
+  limit-noproc: true
+  lua:
+    allow-rules: false
+
+coredump:
+  max-dump: unlimited
+
+host-mode: auto
+
+unix-command:
+  enabled: auto
+
+legacy:
+  uricontent: enabled
+
+exception-policy: auto
+
+engine-analysis:
+  rules-fast-pattern: yes
+  rules: yes
+
+pcre:
+  match-limit: 3500
+  match-limit-recursion: 1500
+
+##
+## Flow tracking and stream reassembly
+##
+
+# linux: applied to all — Docker containers always run on Linux kernel
+host-os-policy:
+  linux: [0.0.0.0/0]
+  windows: []
+  bsd: []
+
+defrag:
+  memcap: 32 MiB
+  hash-size: 65536
+  trackers: 65535
+  max-frags: 65535
+  prealloc: yes
+  timeout: 60
+
+flow:
+  memcap: 128 MiB
+  hash-size: 65536
+  prealloc: 10000
+  emergency-recovery: 30
+
+vlan:
+  use-for-tracking: true
+
+livedev:
+  use-for-tracking: true
+
+flow-timeouts:
+  default:
+    new: 30
+    established: 300
+    closed: 0
+    bypassed: 100
+    emergency-new: 10
+    emergency-established: 100
+    emergency-closed: 0
+    emergency-bypassed: 50
+  tcp:
+    new: 60
+    established: 600
+    closed: 60
+    bypassed: 100
+    emergency-new: 5
+    emergency-established: 100
+    emergency-closed: 10
+    emergency-bypassed: 50
+  udp:
+    new: 30
+    established: 300
+    bypassed: 100
+    emergency-new: 10
+    emergency-established: 100
+    emergency-bypassed: 50
+  icmp:
+    new: 30
+    established: 300
+    bypassed: 100
+    emergency-new: 10
+    emergency-established: 100
+    emergency-bypassed: 50
+
+stream:
+  memcap: 64 MiB
+  # no: mandatory in Docker — virtual NICs produce invalid checksums
+  checksum-validation: no
+  inline: auto
+  reassembly:
+    memcap: 256 MiB
+    depth: 1 MiB
+    toserver-chunk-size: 2560
+    toclient-chunk-size: 2560
+    randomize-chunk-size: yes
+
+host:
+  hash-size: 4096
+  prealloc: 1000
+  memcap: 32 MiB
+
+decoder:
+  teredo:
+    enabled: true
+    ports: $TEREDO_PORTS
+  vxlan:
+    enabled: true
+    ports: $VXLAN_PORTS
+  geneve:
+    enabled: true
+    ports: $GENEVE_PORTS
+
+##
+## Detection and performance
+##
+
+detect:
+  profile: medium
+  custom-values:
+    toclient-groups: 3
+    toserver-groups: 25
+  sgh-mpm-context: auto
+  # No MPM cache in Docker (avoids dependency on an extra volume mount)
+  sgh-mpm-caching: no
+  prefilter:
+    default: mpm
+  thresholds:
+    hash-size: 16384
+    memcap: 16 MiB
+
+mpm-algo: auto
+spm-algo: auto
+
+threading:
+  set-cpu-affinity: no
+  autopin: no
+  detect-thread-ratio: 1.0
+
+luajit:
+  states: 128
+
+profiling:
+  rules:
+    enabled: yes
+    filename: rule_perf.log
+    append: yes
+    limit: 10
+    json: yes
+  keywords:
+    enabled: no
+  prefilter:
+    enabled: no
+  rulegroups:
+    enabled: no
+  packets:
+    enabled: no
+
+##
+## Rules
+##
+
+default-rule-path: /etc/suricata/rules
+
+rule-files:
+  - local.rules
+
+classification-file: /etc/suricata/classification.config
+reference-config-file: /etc/suricata/reference.config

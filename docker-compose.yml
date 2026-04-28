@@ -1,0 +1,28 @@
+services:
+  suricata:
+    image: jasonish/suricata:latest
+    container_name: suricata-wazuh
+
+    # host = Suricata shares the host network stack (Linux + WSL2)
+    # Windows Docker Desktop: uses WSL2 virtual interface (eth0)
+    # Linux: uses the physical NIC configured in .env
+    network_mode: host
+
+    cap_add:
+      - NET_ADMIN   # set interface to promiscuous mode
+      - NET_RAW     # raw sockets for packet capture
+      - SYS_NICE    # real-time thread priority
+
+    # If cap_add is not enough on your system, use:
+    # privileged: true
+
+    volumes:
+      - ./suricata.yaml:/etc/suricata/suricata.yaml:ro
+      - ./rules:/etc/suricata/rules:ro
+      - ./logs:/var/log/suricata
+
+    # -i : capture interface (read from .env)
+    # --init-errors-fatal : fail fast on config errors
+    command: -i ${SURICATA_IFACE:-eth0} --init-errors-fatal
+
+    restart: unless-stopped
