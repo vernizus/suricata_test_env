@@ -1,235 +1,52 @@
 # =============================================================================
-# LOCAL TEST RULES — Suricata + Wazuh
-# SID range: 9000001–9000099  (private/local range, no conflict with ET rules)
+# LOCAL TEST RULES - Suricata + Wazuh
+# SID range: 9000001-9000099  (private/local range, no conflict with ET rules)
 # Goal: quick, easy-to-trigger alerts to validate the detection pipeline
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# ICMP
-# How to trigger: ping <any IP>
-# -----------------------------------------------------------------------------
+# ICMP -- trigger: ping <any IP>
+alert icmp any any -> any any (msg:"[LOCAL] ICMP Echo Request (ping)"; itype:8; sid:9000001; rev:1;)
+alert icmp any any -> any any (msg:"[LOCAL] ICMP Echo Reply"; itype:0; sid:9000002; rev:1;)
 
-alert icmp any any -> any any (
-    msg:"[LOCAL] ICMP Echo Request (ping)";
-    itype:8;
-    sid:9000001; rev:1;)
+# HTTP -- Test server (port 8080) -- trigger: curl http://localhost:8080/
+alert http any any -> any 8080 (msg:"[LOCAL] HTTP request to test server :8080"; flow:established,to_server; sid:9000010; rev:1;)
+alert http any 8080 -> any any (msg:"[LOCAL] HTTP 4xx error from test server"; flow:established,to_client; http.stat_code; content:"4"; startswith; bsize:3; sid:9000011; rev:1;)
+alert http any 8080 -> any any (msg:"[LOCAL] HTTP 5xx error from test server"; flow:established,to_client; http.stat_code; content:"5"; startswith; bsize:3; sid:9000012; rev:1;)
+alert http any 8080 -> any any (msg:"[LOCAL] HTTP 429 Too Many Requests from test server"; flow:established,to_client; http.stat_code; content:"429"; bsize:3; sid:9000013; rev:1;)
 
-alert icmp any any -> any any (
-    msg:"[LOCAL] ICMP Echo Reply";
-    itype:0;
-    sid:9000002; rev:1;)
+# HTTP -- Common tool user agents -- trigger: curl http://localhost:8080/
+alert http any any -> any any (msg:"[LOCAL] curl user-agent detected"; flow:established,to_server; http.user_agent; content:"curl"; nocase; sid:9000020; rev:1;)
+alert http any any -> any any (msg:"[LOCAL] wget user-agent detected"; flow:established,to_server; http.user_agent; content:"Wget"; nocase; sid:9000021; rev:1;)
+alert http any any -> any any (msg:"[LOCAL] Python requests user-agent detected"; flow:established,to_server; http.user_agent; content:"python-requests"; nocase; sid:9000022; rev:1;)
+alert http any any -> any any (msg:"[LOCAL] Nmap HTTP scan detected"; flow:established,to_server; http.user_agent; content:"Nmap"; nocase; sid:9000023; rev:1;)
+alert http any any -> any any (msg:"[LOCAL] Nikto web scanner detected"; flow:established,to_server; http.user_agent; content:"Nikto"; nocase; sid:9000024; rev:1;)
 
+# HTTP -- Injection and path traversal -- trigger: curl "http://localhost:8080/?id=1' OR '1'='1"
+alert http any any -> any any (msg:"[LOCAL] Possible SQL injection in HTTP URI"; flow:established,to_server; http.uri; pcre:"/(%27|'|--|%23|#|OR|UNION|SELECT)/i"; sid:9000030; rev:1;)
+alert http any any -> any any (msg:"[LOCAL] Path traversal attempt in HTTP URI"; flow:established,to_server; http.uri; content:"../"; sid:9000031; rev:1;)
+alert http any any -> any any (msg:"[LOCAL] Path traversal attempt (URL encoded)"; flow:established,to_server; http.uri; content:"%2e%2e%2f"; nocase; sid:9000032; rev:1;)
+alert http any any -> any any (msg:"[LOCAL] XSS attempt in HTTP URI"; flow:established,to_server; http.uri; content:"<script"; nocase; sid:9000033; rev:1;)
 
-# -----------------------------------------------------------------------------
-# HTTP — Test server (port 8080)
-# How to trigger: curl http://localhost:8080/
-# -----------------------------------------------------------------------------
+# TCP -- Connections to sensitive services
+alert tcp any any -> $HOME_NET 22 (msg:"[LOCAL] SSH connection attempt"; flow:to_server; flags:S; sid:9000040; rev:1;)
+alert tcp any any -> $HOME_NET 23 (msg:"[LOCAL] Telnet connection attempt (cleartext protocol)"; flow:to_server; flags:S; sid:9000041; rev:1;)
+alert tcp any any -> $HOME_NET 3389 (msg:"[LOCAL] RDP connection attempt"; flow:to_server; flags:S; sid:9000042; rev:1;)
+alert tcp any any -> $HOME_NET 445 (msg:"[LOCAL] SMB connection attempt"; flow:to_server; flags:S; sid:9000043; rev:1;)
+alert tcp any any -> $HOME_NET 3306 (msg:"[LOCAL] MySQL connection attempt"; flow:to_server; flags:S; sid:9000044; rev:1;)
+alert tcp any any -> $HOME_NET 5432 (msg:"[LOCAL] PostgreSQL connection attempt"; flow:to_server; flags:S; sid:9000045; rev:1;)
+alert tcp any any -> $HOME_NET 6379 (msg:"[LOCAL] Redis connection attempt (unauthenticated?)"; flow:to_server; flags:S; sid:9000046; rev:1;)
+alert tcp any any -> $HOME_NET 27017 (msg:"[LOCAL] MongoDB connection attempt"; flow:to_server; flags:S; sid:9000047; rev:1;)
 
-# Any request to the test server
-alert http any any -> any 8080 (
-    msg:"[LOCAL] HTTP request to test server :8080";
-    flow:established,to_server;
-    sid:9000010; rev:1;)
+# PORT SCANNING -- trigger: nmap -sS <host_IP>
+alert tcp any any -> $HOME_NET any (msg:"[LOCAL] Port scan detected (SYN threshold)"; flow:to_server; flags:S; threshold:type threshold, track by_src, count 15, seconds 10; sid:9000050; rev:1;)
+alert udp any any -> $HOME_NET any (msg:"[LOCAL] UDP port scan detected"; threshold:type threshold, track by_src, count 10, seconds 10; sid:9000051; rev:1;)
 
-# 4xx response from test server
-alert http any 8080 -> any any (
-    msg:"[LOCAL] HTTP 4xx error from test server";
-    flow:established,to_client;
-    http.stat_code; content:"4"; startswith; bsize:3;
-    sid:9000011; rev:1;)
+# DNS -- Long subdomain (DGA/C2 pattern)
+alert dns any any -> any 53 (msg:"[LOCAL] DNS query with unusually long subdomain (possible DGA/C2)"; dns.query; pcre:"/([a-z0-9]{20,})\.(com|net|org|io)/i"; sid:9000061; rev:1;)
 
-# 5xx response from test server
-alert http any 8080 -> any any (
-    msg:"[LOCAL] HTTP 5xx error from test server";
-    flow:established,to_client;
-    http.stat_code; content:"5"; startswith; bsize:3;
-    sid:9000012; rev:1;)
+# TLS -- Non-standard port (possible SSL-wrapped C2) -- REGLA COMENTADA POR ERROR tls.version
+# alert tls any any -> $HOME_NET !443 (msg:"[LOCAL] TLS on non-standard port (possible C2)"; tls.version; content:"TLS"; sid:9000070; rev:1;)
 
-# 429 Too Many Requests (rate limiting)
-alert http any 8080 -> any any (
-    msg:"[LOCAL] HTTP 429 Too Many Requests from test server";
-    flow:established,to_client;
-    http.stat_code; content:"429"; bsize:3;
-    sid:9000013; rev:1;)
-
-
-# -----------------------------------------------------------------------------
-# HTTP — Common tool user agents
-# How to trigger: curl http://localhost:8080/
-# -----------------------------------------------------------------------------
-
-alert http any any -> any any (
-    msg:"[LOCAL] curl user-agent detected";
-    flow:established,to_server;
-    http.user_agent; content:"curl"; nocase;
-    sid:9000020; rev:1;)
-
-alert http any any -> any any (
-    msg:"[LOCAL] wget user-agent detected";
-    flow:established,to_server;
-    http.user_agent; content:"Wget"; nocase;
-    sid:9000021; rev:1;)
-
-alert http any any -> any any (
-    msg:"[LOCAL] Python requests user-agent detected";
-    flow:established,to_server;
-    http.user_agent; content:"python-requests"; nocase;
-    sid:9000022; rev:1;)
-
-alert http any any -> any any (
-    msg:"[LOCAL] Nmap HTTP scan detected";
-    flow:established,to_server;
-    http.user_agent; content:"Nmap"; nocase;
-    sid:9000023; rev:1;)
-
-alert http any any -> any any (
-    msg:"[LOCAL] Nikto web scanner detected";
-    flow:established,to_server;
-    http.user_agent; content:"Nikto"; nocase;
-    sid:9000024; rev:1;)
-
-
-# -----------------------------------------------------------------------------
-# HTTP — Injection and path traversal (attack simulation)
-# How to trigger: curl "http://localhost:8080/page?id=1' OR '1'='1"
-# -----------------------------------------------------------------------------
-
-alert http any any -> any any (
-    msg:"[LOCAL] Possible SQL injection in HTTP URI";
-    flow:established,to_server;
-    http.uri; pcre:"/(\%27|'|--|%23|#|\bOR\b|\bUNION\b|\bSELECT\b)/i";
-    sid:9000030; rev:1;)
-
-alert http any any -> any any (
-    msg:"[LOCAL] Path traversal attempt in HTTP URI";
-    flow:established,to_server;
-    http.uri; content:"../";
-    sid:9000031; rev:1;)
-
-alert http any any -> any any (
-    msg:"[LOCAL] Path traversal attempt (URL encoded)";
-    flow:established,to_server;
-    http.uri; content:"%2e%2e%2f"; nocase;
-    sid:9000032; rev:1;)
-
-alert http any any -> any any (
-    msg:"[LOCAL] XSS attempt in HTTP URI";
-    flow:established,to_server;
-    http.uri; content:"<script"; nocase;
-    sid:9000033; rev:1;)
-
-
-# -----------------------------------------------------------------------------
-# TCP — Connections to sensitive services
-# How to trigger: ssh localhost, telnet localhost, etc.
-# -----------------------------------------------------------------------------
-
-alert tcp any any -> $HOME_NET 22 (
-    msg:"[LOCAL] SSH connection attempt";
-    flow:to_server; flags:S;
-    sid:9000040; rev:1;)
-
-alert tcp any any -> $HOME_NET 23 (
-    msg:"[LOCAL] Telnet connection attempt (cleartext protocol)";
-    flow:to_server; flags:S;
-    sid:9000041; rev:1;)
-
-alert tcp any any -> $HOME_NET 3389 (
-    msg:"[LOCAL] RDP connection attempt";
-    flow:to_server; flags:S;
-    sid:9000042; rev:1;)
-
-alert tcp any any -> $HOME_NET 445 (
-    msg:"[LOCAL] SMB connection attempt";
-    flow:to_server; flags:S;
-    sid:9000043; rev:1;)
-
-alert tcp any any -> $HOME_NET 3306 (
-    msg:"[LOCAL] MySQL connection attempt";
-    flow:to_server; flags:S;
-    sid:9000044; rev:1;)
-
-alert tcp any any -> $HOME_NET 5432 (
-    msg:"[LOCAL] PostgreSQL connection attempt";
-    flow:to_server; flags:S;
-    sid:9000045; rev:1;)
-
-alert tcp any any -> $HOME_NET 6379 (
-    msg:"[LOCAL] Redis connection attempt (unauthenticated?)";
-    flow:to_server; flags:S;
-    sid:9000046; rev:1;)
-
-alert tcp any any -> $HOME_NET 27017 (
-    msg:"[LOCAL] MongoDB connection attempt";
-    flow:to_server; flags:S;
-    sid:9000047; rev:1;)
-
-
-# -----------------------------------------------------------------------------
-# PORT SCANNING — threshold-based detection
-# How to trigger: nmap -sS <host_IP>
-# -----------------------------------------------------------------------------
-
-# SYN scan: 15+ SYNs from same source in 10 seconds
-alert tcp any any -> $HOME_NET any (
-    msg:"[LOCAL] Port scan detected (SYN threshold)";
-    flow:to_server; flags:S;
-    threshold:type threshold, track by_src, count 15, seconds 10;
-    sid:9000050; rev:1;)
-
-# UDP scan: 10+ UDP from same source in 10 seconds
-alert udp any any -> $HOME_NET any (
-    msg:"[LOCAL] UDP port scan detected";
-    threshold:type threshold, track by_src, count 10, seconds 10;
-    sid:9000051; rev:1;)
-
-
-# -----------------------------------------------------------------------------
-# DNS
-# How to trigger: nslookup google.com, curl google.com
-# Warning: high volume — comment out if too noisy
-# -----------------------------------------------------------------------------
-
-#alert dns any any -> any 53 (
-#    msg:"[LOCAL] DNS query";
-#    dns.query;
-#    sid:9000060; rev:1;)
-
-# DNS queries with unusually long subdomains (common DGA/C2 pattern)
-alert dns any any -> any 53 (
-    msg:"[LOCAL] DNS query with unusually long subdomain (possible DGA/C2)";
-    dns.query; pcre:"/([a-z0-9]{20,})\.(com|net|org|io)/i";
-    sid:9000061; rev:1;)
-
-
-# -----------------------------------------------------------------------------
-# TLS / HTTPS
-# Detects TLS on non-standard ports (possible SSL-wrapped C2)
-# -----------------------------------------------------------------------------
-
-alert tls any any -> $HOME_NET !443 (
-    msg:"[LOCAL] TLS on non-standard port (possible C2)";
-    tls.version; content:"TLS";
-    sid:9000070; rev:1;)
-
-
-# -----------------------------------------------------------------------------
-# BRUTE FORCE — repeated connection attempts
-# How to trigger: for i in {1..20}; do curl http://localhost:8080/401; done
-# -----------------------------------------------------------------------------
-
-# Multiple 401s to same client — authentication brute force
-alert http any 8080 -> any any (
-    msg:"[LOCAL] Possible brute force - multiple HTTP 401 from server";
-    flow:established,to_client;
-    http.stat_code; content:"401"; bsize:3;
-    threshold:type threshold, track by_dst, count 5, seconds 60;
-    sid:9000080; rev:1;)
-
-# Multiple 403s — protected resource enumeration
-alert http any 8080 -> any any (
-    msg:"[LOCAL] Possible resource enumeration - multiple HTTP 403";
-    flow:established,to_client;
-    http.stat_code; content:"403"; bsize:3;
-    threshold:type threshold, track by_dst, count 5, seconds 60;
-    sid:9000081; rev:1;)
+# BRUTE FORCE -- trigger: for i in {1..20}; do curl http://localhost:8080/401; done
+alert http any 8080 -> any any (msg:"[LOCAL] Possible brute force - multiple HTTP 401 from server"; flow:established,to_client; http.stat_code; content:"401"; bsize:3; threshold:type threshold, track by_dst, count 5, seconds 60; sid:9000080; rev:1;)
+alert http any 8080 -> any any (msg:"[LOCAL] Possible resource enumeration - multiple HTTP 403"; flow:established,to_client; http.stat_code; content:"403"; bsize:3; threshold:type threshold, track by_dst, count 5, seconds 60; sid:9000081; rev:1;)
