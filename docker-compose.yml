@@ -17,8 +17,8 @@ services:
     # privileged: true
 
     volumes:
-      - ./suricata.yaml:/etc/suricata/suricata.yaml:ro
-      - ./rules:/etc/suricata/rules:ro
+      - ./suricata.yaml:/etc/suricata/suricata.yaml
+      - ./rules:/etc/suricata/rules
       - ./logs:/var/log/suricata
 
     # -i : capture interface (read from .env)
